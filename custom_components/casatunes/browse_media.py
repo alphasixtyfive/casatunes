@@ -1,10 +1,8 @@
 """Support to interface with the Roon API."""
 import logging
 
-from homeassistant.components.media_player import BrowseMedia
-from homeassistant.components.media_player.const import MediaClass
+from homeassistant.components.media_player import BrowseMedia, MediaClass, MediaType
 from homeassistant.components.media_player.errors import BrowseError
-
 
 class UnknownMediaType(BrowseError):
     """Unknown media type."""
@@ -34,7 +32,6 @@ async def build_item_response(
 
 async def item_payload(casa_server, item):
     """Create response payload for a single media item."""
-
     title = item["Title"]
 
     thumbnail = None
@@ -59,7 +56,7 @@ async def item_payload(casa_server, item):
         can_play = False
         can_expand = True
     else:
-        media_content_type = "track"
+        media_content_type = MediaType.TRACK
         media_class = MediaClass.TRACK
         can_expand = False
         can_play = True
@@ -81,7 +78,6 @@ async def item_payload(casa_server, item):
 
 async def library_payload(casa_server, zone_id, media_content_id):
     """Create response payload for the library."""
-
     opts = {
         "hierarchy": "browse",
         "zone_id": zone_id,
@@ -98,9 +94,7 @@ async def library_payload(casa_server, zone_id, media_content_id):
     result_detail = await casa_server.data.get_media(opts)
     _LOGGER.debug("Result detail %s", result_detail)
 
-    list_title = "Browse Media"
-    if "Title" in result_detail:
-        list_title = result_detail["Title"]
+    list_title = result_detail.get("Title", "Browse Media")
 
     library_info = BrowseMedia(
         title=list_title,
@@ -112,9 +106,8 @@ async def library_payload(casa_server, zone_id, media_content_id):
         children=[],
     )
 
-    if "MediaItems" in result_detail:
-        for item in result_detail["MediaItems"]:
-            entry = await item_payload(casa_server, item)
-            library_info.children.append(entry)
+    for item in result_detail.get("MediaItems", []):
+        entry = await item_payload(casa_server, item)
+        library_info.children.append(entry)
 
     return library_info

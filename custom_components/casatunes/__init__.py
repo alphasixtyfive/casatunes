@@ -82,7 +82,13 @@ class CasaTunesDataUpdateCoordinator(DataUpdateCoordinator[CasaTunes]):
         """Initialize."""
         self.casatunes = client
 
-        super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=SCAN_INTERVAL)
+        super().__init__(
+            hass,
+            logger=_LOGGER,
+            name=DOMAIN,
+            update_method=self._async_update_data,
+            update_interval=SCAN_INTERVAL,
+        )
         self.entities: list[CasaTunesDeviceEntity] = []
 
     async def _async_update_data(self) -> CasaTunes:
@@ -119,7 +125,7 @@ class CasaTunesEntity(CoordinatorEntity):
 
     @property
     def name(self) -> str:
-        """Return the zone_id of the entity."""
+        """Return the name of the entity."""
         return self._name
 
     @property
@@ -132,18 +138,19 @@ class CasaTunesEntity(CoordinatorEntity):
         """Get the CasaTunes Zones."""
         return self.coordinator.data.zones_dict[self._zone_id]
 
+
 class CasaTunesDeviceEntity(CasaTunesEntity):
     """Defines a CasaTunes device entity."""
 
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this CasaTunes device."""
-        if self._device_id is None:
+        if not self._device_id:
             return None
 
-        return {
-            "identifiers": {(DOMAIN, self._device_id)},
-            "manufacturer": "CasaTunes",
-            "name": self._name,
-            "sw_version": self.system.CasaTunesVersion,
-        }
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_id)},
+            manufacturer="CasaTunes",
+            name=self._name,
+            sw_version=self.system.CasaTunesVersion,
+        )

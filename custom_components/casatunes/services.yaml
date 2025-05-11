@@ -48,23 +48,20 @@ tts:
   fields:
     input:
       name: Input
-      description:
-        Specifies the Text or SSML to play.
+      description: Specifies the Text or SSML to play.
         More information (https://cloud.google.com/text-to-speech/docs/ssml).
       selector:
         text:
           multiline: true
     language_code:
       name: Language Code
-      description:
-        Specifies the language code to use.
+      description: Specifies the language code to use.
         More information (https://cloud.google.com/speech-to-text/docs/languages).
       selector:
         text:
     gender:
       name: Gender
-      description:
-        Specifies the gender to use when speaking (MALE, FEMALE, NEUTRAL)
+      description: Specifies the gender to use when speaking (MALE, FEMALE, NEUTRAL)
       selector:
         select:
           mode: dropdown
@@ -74,8 +71,7 @@ tts:
             - "Neutral"
     voice:
       name: Voice
-      description:
-        Specifies the voice to use.
+      description: Specifies the voice to use.
         More information (http://your-casatunes-ip:8735/api/v1/system/tts/voices?languageCode=en-US).
       selector:
         text:
