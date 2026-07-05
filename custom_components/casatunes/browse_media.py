@@ -1,11 +1,14 @@
-"""Support to interface with the Roon API."""
+"""Support for CasaTunes media browsing."""
+from typing import Any
 import logging
 
 from homeassistant.components.media_player import BrowseMedia, MediaClass, MediaType
 from homeassistant.components.media_player.errors import BrowseError
 
+
 class UnknownMediaType(BrowseError):
     """Unknown media type."""
+
 
 CT_COLLECTION = 8
 CT_ALLOWSELECT = 8192
@@ -23,6 +26,7 @@ async def build_item_response(
         _LOGGER.debug("browse_media: %s: %s", media_content_type, media_content_id)
         if media_content_type in [None, "library"]:
             return await library_payload(casa_server, zone_id, media_content_id)
+        raise UnknownMediaType
 
     except UnknownMediaType as err:
         raise BrowseError(
@@ -30,20 +34,25 @@ async def build_item_response(
         ) from err
 
 
+def _media_flags(item: dict[str, Any]) -> int:
+    """Return media item flags as an integer."""
+    try:
+        return int(item.get("Flags") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 async def item_payload(casa_server, item):
     """Create response payload for a single media item."""
-    title = item["Title"]
+    title = item.get("Title") or "Browse Media"
 
     thumbnail = None
     image_id = item.get("ArtworkURI")
     if image_id:
-        thumbnail = (
-            image_id
-            if image_id.startswith(("http://", "https://"))
-            else await casa_server.data.get_image(image_id)
-        )
+        image_id = str(image_id)
+        thumbnail = casa_server.data.image_url(image_id)
 
-    flags = item["Flags"]
+    flags = _media_flags(item)
 
     if (flags & CT_COLLECTION) and (flags & CT_ALLOWSELECT):
         media_content_type = "library"
@@ -61,7 +70,7 @@ async def item_payload(casa_server, item):
         can_expand = False
         can_play = True
 
-    media_content_id = item["ID"]
+    media_content_id = str(item.get("ID") or "")
 
     payload = {
         "title": title,
@@ -79,13 +88,11 @@ async def item_payload(casa_server, item):
 async def library_payload(casa_server, zone_id, media_content_id):
     """Create response payload for the library."""
     opts = {
-        "hierarchy": "browse",
         "zone_id": zone_id,
         "limit": BROWSE_LIMIT,
     }
 
     if media_content_id is None or media_content_id == "Explore":
-        opts["pop_all"] = True
         content_id = "Explore"
     else:
         opts["item_id"] = media_content_id
@@ -106,7 +113,9 @@ async def library_payload(casa_server, zone_id, media_content_id):
         children=[],
     )
 
-    for item in result_detail.get("MediaItems", []):
+    for item in result_detail.get("MediaItems") or []:
+        if not isinstance(item, dict):
+            continue
         entry = await item_payload(casa_server, item)
         library_info.children.append(entry)
 

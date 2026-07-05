@@ -4,12 +4,10 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 
-from aiohttp.client_exceptions import ClientResponseError
-from pycasatunes import CasaTunes
+from aiohttp import ClientError
 from pycasatunes.exceptions import CasaException
 from pycasatunes.objects.system import CasaTunesSystem
 from pycasatunes.objects.zone import CasaTunesZone
-import async_timeout
 import voluptuous as vol
 
 from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
@@ -24,6 +22,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from .api import CasaTunesClient
 from .const import DOMAIN
 
 CONFIG_SCHEMA = vol.Schema(
@@ -40,12 +39,13 @@ CONFIG_SCHEMA = vol.Schema(
 PLATFORMS = [MEDIA_PLAYER_DOMAIN]
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=15)
+UPDATE_ERRORS = (CasaException, ClientError, TimeoutError)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up CasaTunes from a config entry."""
 
-    client = CasaTunes(async_get_clientsession(hass), entry.data[CONF_HOST])
+    client = CasaTunesClient(async_get_clientsession(hass), entry.data[CONF_HOST])
     coordinator = CasaTunesDataUpdateCoordinator(hass, client=client)
 
     hass.data.setdefault(DOMAIN, {})
@@ -64,7 +64,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
 
     return unload_ok
 
@@ -75,10 +75,10 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await async_setup_entry(hass, entry)
 
 
-class CasaTunesDataUpdateCoordinator(DataUpdateCoordinator[CasaTunes]):
+class CasaTunesDataUpdateCoordinator(DataUpdateCoordinator[CasaTunesClient]):
     """Class to manage fetching data from the API."""
 
-    def __init__(self, hass: HomeAssistant, client: CasaTunes) -> None:
+    def __init__(self, hass: HomeAssistant, client: CasaTunesClient) -> None:
         """Initialize."""
         self.casatunes = client
 
@@ -91,12 +91,12 @@ class CasaTunesDataUpdateCoordinator(DataUpdateCoordinator[CasaTunes]):
         )
         self.entities: list[CasaTunesDeviceEntity] = []
 
-    async def _async_update_data(self) -> CasaTunes:
+    async def _async_update_data(self) -> CasaTunesClient:
         """Update data via library."""
         try:
             await self.casatunes.fetch()
-        except CasaException as exception:
-            raise UpdateFailed() from exception
+        except UPDATE_ERRORS as exception:
+            raise UpdateFailed("Error communicating with CasaTunes") from exception
 
         return self.casatunes
 
@@ -143,7 +143,7 @@ class CasaTunesDeviceEntity(CasaTunesEntity):
     """Defines a CasaTunes device entity."""
 
     @property
-    def device_info(self) -> DeviceInfo:
+    def device_info(self) -> DeviceInfo | None:
         """Return device information about this CasaTunes device."""
         if not self._device_id:
             return None

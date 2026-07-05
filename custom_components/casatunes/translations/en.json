@@ -5,7 +5,7 @@
             "user": {
                 "title": "Fill in your CasaTunes IP Address",
                 "data": {
-                    "ip": "CasaTunes IP Adress"
+                    "host": "CasaTunes IP Address"
                 }
             },
             "discovery_confirm": {
@@ -14,7 +14,7 @@
             "reauth_confirm": {
                 "title": "Fill in your CasaTunes IP Address",
                 "data": {
-                    "ip": "CasaTunes IP Adress"
+                    "host": "CasaTunes IP Address"
                 }
             }
         },

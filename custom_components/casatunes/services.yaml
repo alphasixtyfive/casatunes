@@ -6,6 +6,12 @@ search:
       integration: casatunes
       domain: media_player
   fields:
+    keyword:
+      name: Search text
+      description: Free text search. Leave this empty when using artist, album, or track fields.
+      example: The Beatles White Album
+      selector:
+        text:
     keyword_artist:
       name: Search artist
       description: The keywords to search for in artists.
@@ -26,17 +32,17 @@ search:
         text:
     mode:
       name: Play mode
-      description: "
-        How you want to add the media, default is `add`.
-        `playNow` (Replace Queue Items and Play Now)
-        `playShuffle` (same as playNow but with shuffle enabled)
-        `playUnshuffle` (same as playNow but with shuffle disabled)
-        `add` (Add Items to Queue),
-        `addplay` (Add Items to Queue and start playing the first newly added item)
-        "
+      description: How CasaTunes should play or queue the matched media.
       example: add
       selector:
-        text:
+        select:
+          mode: dropdown
+          options:
+            - playNow
+            - playShuffle
+            - playUnshuffle
+            - add
+            - addplay
 
 tts:
   name: TTS
@@ -53,6 +59,11 @@ tts:
       selector:
         text:
           multiline: true
+    ssml:
+      name: SSML
+      description: Treat the input as SSML.
+      selector:
+        boolean:
     language_code:
       name: Language Code
       description: Specifies the language code to use.

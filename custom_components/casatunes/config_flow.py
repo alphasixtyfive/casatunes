@@ -1,42 +1,53 @@
 """Config flow for CasaTunes."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from urllib.parse import urlparse
 
-from pycasatunes import CasaTunes
+from aiohttp import ClientError
 from pycasatunes.exceptions import CasaException
-import async_timeout
 import voluptuous as vol
 
 from homeassistant.components.ssdp import ATTR_SSDP_LOCATION
-from homeassistant.helpers.service_info.ssdp import ATTR_UPNP_FRIENDLY_NAME
 from homeassistant.config_entries import ConfigFlow
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.service_info.ssdp import (
+    ATTR_UPNP_FRIENDLY_NAME,
+    SsdpServiceInfo,
+)
 
+from .api import CasaTunesClient
 from .const import DOMAIN
 
+_LOGGER = logging.getLogger(__name__)
+CONNECT_ERRORS = (CasaException, ClientError, TimeoutError)
+
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str})
+
 
 async def validate_input(hass: HomeAssistant, data: dict) -> dict:
     """Validate connectivity and fetch system info."""
     session = async_get_clientsession(hass)
-    casa = CasaTunes(session, data[CONF_HOST])
-    # Use fetch() instead of deprecated get_system()
-    async with async_timeout.timeout(10):
+    casa = CasaTunesClient(session, data[CONF_HOST])
+    async with asyncio.timeout(10):
         await casa.fetch()
     system = casa.system
+    if not system.MACAddress:
+        raise CasaException("CasaTunes system response missing MAC address")
     return {
         "title": system.AppName,
         "mac_address": format_mac(system.MACAddress),
     }
 
+
 class CasaTunesConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a CasaTunes config flow."""
+
     VERSION = 1
 
     def __init__(self):
@@ -60,7 +71,7 @@ class CasaTunesConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         try:
             info = await validate_input(self.hass, user_input)
-        except CasaException:
+        except CONNECT_ERRORS:
             _LOGGER.debug("Unable to connect to CasaTunes", exc_info=True)
             errors["base"] = "cannot_connect"
             return self._show_setup_form(errors)
@@ -77,18 +88,23 @@ class CasaTunesConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_ssdp(
-        self, discovery_info: DiscoveryInfoType
+        self, discovery_info: SsdpServiceInfo
     ) -> FlowResult:
         """Handle a flow initiated by SSDP discovery."""
         host = urlparse(discovery_info[ATTR_SSDP_LOCATION]).hostname
+        if host is None:
+            return self.async_abort(reason="cannot_connect")
+
         name = discovery_info[ATTR_UPNP_FRIENDLY_NAME]
         try:
             session = async_get_clientsession(self.hass)
-            casa = CasaTunes(session, host)
-            async with async_timeout.timeout(10):
+            casa = CasaTunesClient(session, host)
+            async with asyncio.timeout(10):
                 await casa.fetch()
             mac = casa.system.MACAddress
-        except CasaException:
+            if not mac:
+                raise CasaException("CasaTunes system response missing MAC address")
+        except CONNECT_ERRORS:
             return self.async_abort(reason="cannot_connect")
         except Exception:
             _LOGGER.exception("Unexpected error fetching MAC from CasaTunes")
