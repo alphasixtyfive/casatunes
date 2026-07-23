@@ -64,13 +64,15 @@ def _require_search_text(data: dict) -> dict:
 
 
 SEARCH_SCHEMA = vol.All(
-    {
-        vol.Optional(ATTR_KEYWORD): cv.string,
-        vol.Optional(ATTR_KEYWORD_ARTIST): cv.string,
-        vol.Optional(ATTR_KEYWORD_ALBUM): cv.string,
-        vol.Optional(ATTR_KEYWORD_TRACK_NAME): cv.string,
-        vol.Optional(ATTR_MODE, default=DEFAULT_QUEUE_MODE): vol.In(QUEUE_MODES),
-    },
+    cv.make_entity_service_schema(
+        {
+            vol.Optional(ATTR_KEYWORD): cv.string,
+            vol.Optional(ATTR_KEYWORD_ARTIST): cv.string,
+            vol.Optional(ATTR_KEYWORD_ALBUM): cv.string,
+            vol.Optional(ATTR_KEYWORD_TRACK_NAME): cv.string,
+            vol.Optional(ATTR_MODE, default=DEFAULT_QUEUE_MODE): vol.In(QUEUE_MODES),
+        }
+    ),
     _require_search_text,
 )
 
