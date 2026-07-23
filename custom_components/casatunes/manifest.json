@@ -4,7 +4,7 @@
   "config_flow": true,
   "documentation": "https://github.com/alphasixtyfive/casatunes",
   "issue_tracker": "https://github.com/alphasixtyfive/casatunes/issues",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "requirements": [
     "pycasatunes==0.1.3"
   ],
