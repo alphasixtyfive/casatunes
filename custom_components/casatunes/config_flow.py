@@ -1,25 +1,24 @@
 """Config flow for CasaTunes."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from urllib.parse import urlparse
 
-from aiohttp import ClientError
-from pycasatunes.exceptions import CasaException
 import voluptuous as vol
-
-from homeassistant.components.ssdp import ATTR_SSDP_LOCATION
+from aiohttp import ClientError
 from homeassistant.config_entries import ConfigFlow
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.service_info.ssdp import (
     ATTR_UPNP_FRIENDLY_NAME,
     SsdpServiceInfo,
 )
+from pycasatunes.exceptions import CasaException
 
 from .api import CasaTunesClient
 from .const import DOMAIN
@@ -27,7 +26,7 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 CONNECT_ERRORS = (CasaException, ClientError, TimeoutError)
 
-STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str})
+STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): vol.All(str, str.strip)})
 
 
 async def validate_input(hass: HomeAssistant, data: dict) -> dict:
@@ -35,8 +34,8 @@ async def validate_input(hass: HomeAssistant, data: dict) -> dict:
     session = async_get_clientsession(hass)
     casa = CasaTunesClient(session, data[CONF_HOST])
     async with asyncio.timeout(10):
-        await casa.fetch()
-    system = casa.system
+        snapshot = await casa.fetch()
+    system = snapshot.system
     if not system.MACAddress:
         raise CasaException("CasaTunes system response missing MAC address")
     return {
@@ -87,21 +86,19 @@ class CasaTunesConfigFlow(ConfigFlow, domain=DOMAIN):
             data={CONF_HOST: user_input[CONF_HOST]},
         )
 
-    async def async_step_ssdp(
-        self, discovery_info: SsdpServiceInfo
-    ) -> FlowResult:
+    async def async_step_ssdp(self, discovery_info: SsdpServiceInfo) -> FlowResult:
         """Handle a flow initiated by SSDP discovery."""
-        host = urlparse(discovery_info[ATTR_SSDP_LOCATION]).hostname
+        host = urlparse(discovery_info.ssdp_location or "").hostname
         if host is None:
             return self.async_abort(reason="cannot_connect")
 
-        name = discovery_info[ATTR_UPNP_FRIENDLY_NAME]
+        name = discovery_info.upnp.get(ATTR_UPNP_FRIENDLY_NAME, "CasaTunes")
         try:
             session = async_get_clientsession(self.hass)
             casa = CasaTunesClient(session, host)
             async with asyncio.timeout(10):
-                await casa.fetch()
-            mac = casa.system.MACAddress
+                snapshot = await casa.fetch()
+            mac = snapshot.system.MACAddress
             if not mac:
                 raise CasaException("CasaTunes system response missing MAC address")
         except CONNECT_ERRORS:
@@ -130,4 +127,27 @@ class CasaTunesConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="discovery_confirm",
             description_placeholders={"name": self.discovery_info[CONF_NAME]},
+        )
+
+    async def async_step_reconfigure(self, user_input=None):
+        """Change the address without replacing devices or entities."""
+        errors = {}
+        entry = self._get_reconfigure_entry()
+        if user_input is not None:
+            try:
+                info = await validate_input(self.hass, user_input)
+            except CONNECT_ERRORS:
+                errors["base"] = "cannot_connect"
+            else:
+                await self.async_set_unique_id(info["mac_address"])
+                self._abort_if_unique_id_mismatch()
+                return self.async_update_reload_and_abort(
+                    entry, data_updates=user_input
+                )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_USER_DATA_SCHEMA, entry.data
+            ),
+            errors=errors,
         )

@@ -1,26 +1,28 @@
 """Support for the CasaTunes media player."""
+
 from __future__ import annotations
 
-from datetime import datetime
 import logging
+from datetime import datetime
 from typing import Any
-import voluptuous as vol
 
-from homeassistant.util.dt import utcnow
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+import voluptuous as vol
 from homeassistant.components.media_player import (
     BrowseMedia,
+    MediaPlayerDeviceClass,
+    MediaPlayerEnqueue,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
-    MediaPlayerDeviceClass,
+    RepeatMode,
 )
-from homeassistant.helpers import config_validation as cv, entity_platform
-
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from pycasatunes.objects.zone import CasaTunesZone
 
+from .browse_media import CT_ALLOWSELECT, CT_COLLECTION, build_item_response
 from .const import (
     ATTR_CHIME,
     ATTR_GENDER,
@@ -33,16 +35,12 @@ from .const import (
     ATTR_MODE,
     ATTR_POST_WAIT,
     ATTR_PRE_WAIT,
-    ATTR_VOLUME,
     ATTR_SSML,
     ATTR_VOICE,
-    DOMAIN,
-    SERVICE_DOORBELL,
-    SERVICE_SEARCH,
-    SERVICE_TTS,
+    ATTR_VOLUME,
 )
-from .browse_media import CT_ALLOWSELECT, CT_COLLECTION, build_item_response
-from . import CasaTunesDataUpdateCoordinator, CasaTunesDeviceEntity
+from .coordinator import CasaTunesDataUpdateCoordinator
+from .entity import CasaTunesDeviceEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -181,12 +179,15 @@ def _best_search_item(
 
     return max(items, key=lambda item: _search_score(item, service_data))
 
+
 # map CasaTunes status codes to MediaPlayerState enums
 STATUS_TO_STATE = {
     0: MediaPlayerState.IDLE,
     1: MediaPlayerState.PAUSED,
     2: MediaPlayerState.PLAYING,
-    3: MediaPlayerState.ON,
+    3: MediaPlayerState.BUFFERING,
+    4: MediaPlayerState.BUFFERING,
+    5: MediaPlayerState.BUFFERING,
 }
 
 SUPPORT_CASATUNES = (
@@ -208,9 +209,10 @@ SUPPORT_CASATUNES = (
     | MediaPlayerEntityFeature.VOLUME_SET
 )
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the CasaTunes config entry."""
-    coordinator: CasaTunesDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: CasaTunesDataUpdateCoordinator = entry.runtime_data
     unique_id = coordinator.data.system.attributes["MACAddress"]
 
     players = [
@@ -218,23 +220,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         for zone in coordinator.data.zones
     ]
     async_add_entities(players)
-
-    platform = entity_platform.async_get_current_platform()
-    platform.async_register_entity_service(
-        SERVICE_SEARCH,
-        SEARCH_SCHEMA,
-        "search",
-    )
-    platform.async_register_entity_service(
-        SERVICE_TTS,
-        TTS_SCHEMA,
-        "async_tts",
-    )
-    platform.async_register_entity_service(
-        SERVICE_DOORBELL,
-        DOORBELL_SCHEMA,
-        "async_doorbell",
-    )
 
 
 class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
@@ -254,9 +239,7 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
             zone_id=zone.ZoneID,
         )
         self._attr_unique_id = f"{unique_id}_{zone.ZoneID}"
-        self._attr_supported_features = SUPPORT_CASATUNES
         self._attr_device_class = MediaPlayerDeviceClass.SPEAKER
-        self._server = coordinator
         self._zone_id = zone.ZoneID
         self._media_position_updated_at = None
 
@@ -286,13 +269,11 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
 
     def _casatunes_entities(self) -> list[CasaTunesMediaPlayer]:
         """Return all media player entities of the system."""
-        entities: list[CasaTunesMediaPlayer] = []
-        for coord in self.hass.data[DOMAIN].values():
-            entities += [
-                ent for ent in coord.entities
-                if isinstance(ent, CasaTunesMediaPlayer)
-            ]
-        return entities
+        return [
+            ent
+            for ent in self.coordinator.entities
+            if isinstance(ent, CasaTunesMediaPlayer)
+        ]
 
     def _group_entities(self) -> list[CasaTunesMediaPlayer]:
         """Return entities in this zone's CasaTunes group."""
@@ -316,11 +297,6 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
         return bool(self.zone.SharedRoomID and not self.zone.MasterMode)
 
     @property
-    def name(self) -> str:
-        """Return the name of the device."""
-        return self.zone.GroupName or self.zone.Name
-
-    @property
     def state(self) -> MediaPlayerState | None:
         """Return the state of the device."""
         if not self.zone.Power:
@@ -331,6 +307,76 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
             status = nowplaying.Status
             return STATUS_TO_STATE.get(status, MediaPlayerState.ON)
         return MediaPlayerState.ON
+
+    def _source_enabled(self, source_id: int) -> bool:
+        mask = self.zone.EnabledSources
+        return mask is None or bool(int(mask) & (1 << int(source_id)))
+
+    @property
+    def supported_features(self):
+        features = MediaPlayerEntityFeature.GROUPING
+        if not self.zone.HidePowerControl:
+            features |= (
+                MediaPlayerEntityFeature.TURN_ON | MediaPlayerEntityFeature.TURN_OFF
+            )
+        if not self.zone.HideSourceControl:
+            features |= MediaPlayerEntityFeature.SELECT_SOURCE
+        if not self.zone.FixedVolumeEnabled:
+            features |= (
+                MediaPlayerEntityFeature.VOLUME_MUTE
+                | MediaPlayerEntityFeature.VOLUME_STEP
+            )
+            if self.zone.VolumeControlType != 2:
+                features |= MediaPlayerEntityFeature.VOLUME_SET
+        source = self.coordinator.data.sources_dict.get(self.zone.SourceID)
+        if source is None or not ((source.MediaTypesSupported or 0) & 1):
+            return features
+        features |= (
+            MediaPlayerEntityFeature.BROWSE_MEDIA
+            | MediaPlayerEntityFeature.PLAY_MEDIA
+            | MediaPlayerEntityFeature.MEDIA_ENQUEUE
+        )
+        controls = (
+            (self._nowplaying.attributes.get("Controls") or 0)
+            if self._nowplaying
+            else 0
+        )
+        for mask, feature in (
+            (1, MediaPlayerEntityFeature.PLAY),
+            (2, MediaPlayerEntityFeature.STOP),
+            (4, MediaPlayerEntityFeature.PAUSE),
+            (8, MediaPlayerEntityFeature.SHUFFLE_SET),
+            (16, MediaPlayerEntityFeature.REPEAT_SET),
+            (32, MediaPlayerEntityFeature.NEXT_TRACK),
+            (64, MediaPlayerEntityFeature.PREVIOUS_TRACK),
+            (256, MediaPlayerEntityFeature.SEEK),
+            (0x40000, MediaPlayerEntityFeature.CLEAR_PLAYLIST),
+        ):
+            if controls & mask:
+                features |= feature
+        return features
+
+    @property
+    def repeat(self):
+        if self._nowplaying:
+            return {0: RepeatMode.OFF, 1: RepeatMode.ALL, 2: RepeatMode.ONE}.get(
+                self._nowplaying.RepeatMode
+            )
+        return None
+
+    async def async_set_repeat(self, repeat):
+        modes = {RepeatMode.OFF: "off", RepeatMode.ALL: "on", RepeatMode.ONE: "once"}
+        if repeat not in modes:
+            raise ServiceValidationError("Invalid repeat mode")
+        await self.coordinator.command(
+            "player_action", self.zone_id, "repeat", modes[repeat]
+        )
+
+    async def async_volume_up(self):
+        await self.coordinator.command("set_zone", self.zone_id, AdjustVolume=1)
+
+    async def async_volume_down(self):
+        await self.coordinator.command("set_zone", self.zone_id, AdjustVolume=-1)
 
     @property
     def shuffle(self) -> bool | None:
@@ -367,8 +413,9 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
     def source_list(self) -> list[str]:
         """List of available input sources."""
         return [
-            src.Name for src in self.coordinator.data.sources
-            if not src.Hidden
+            src.Name
+            for src in self.coordinator.data.sources
+            if not src.Hidden and self._source_enabled(src.SourceID)
         ]
 
     @property
@@ -376,7 +423,7 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
         """Return the track number of current media."""
         nowplaying = self._nowplaying
         if nowplaying is not None:
-            return nowplaying.QueueSongIndex
+            return None  # Queue index is not an album track number.
         return None
 
     @property
@@ -414,7 +461,6 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
     def media_position(self) -> int | None:
         """Position of current playing media in seconds."""
         if self._media_playback_trackable():
-            self._media_position_updated_at = utcnow()
             return self._nowplaying.CurrProgress
         return None
 
@@ -422,7 +468,7 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
     def media_position_updated_at(self) -> datetime | None:
         """When the position was last updated."""
         if self._media_playback_trackable():
-            return self._media_position_updated_at
+            return self.coordinator.updated_at
         return None
 
     @property
@@ -436,7 +482,7 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
         nowplaying = self._nowplaying
         if nowplaying is not None:
             if image := nowplaying.CurrSong.ArtworkURI:
-                return self.coordinator.data.image_url(image)
+                return self.coordinator.client.image_url(image)
         return None
 
     @property
@@ -447,10 +493,12 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
     @property
     def group_members(self) -> list[str] | None:
         """Return a list of entity_ids in this zone's group."""
-        if not self.is_master:
-            return None
-        clients = [ent.entity_id for ent in self._group_entities() if ent.is_client]
-        return [self.entity_id] + clients
+        group = self._group_entities()
+        if not group:
+            return [self.entity_id]
+        return [
+            ent.entity_id for ent in sorted(group, key=lambda ent: not ent.is_master)
+        ]
 
     @property
     def zone_master(self) -> int | None:
@@ -468,80 +516,97 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
         if not any(ent.is_client for ent in self._group_entities()):
             master = self.zone_master
             if master is not None:
-                await self.coordinator.data.zone_master(master, False)
-                await self.coordinator.async_refresh()
+                await self.coordinator.command("zone_master", master, False)
                 _LOGGER.debug("Zone %s is no longer master.", master)
 
     async def async_turn_on(self):
-        await self.coordinator.data.turn_on(self.zone_id)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("turn_on", self.zone_id)
 
     async def async_turn_off(self):
-        await self.coordinator.data.turn_off(self.zone_id)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("turn_off", self.zone_id)
 
     async def async_set_volume_level(self, volume: float):
-        await self.coordinator.data.set_volume_level(self.zone_id, int(volume * 100))
-        await self.coordinator.async_refresh()
+        await self.coordinator.command(
+            "set_volume_level", self.zone_id, int(volume * 100)
+        )
 
     async def async_mute_volume(self, mute: bool):
-        await self.coordinator.data.mute_volume(self.zone_id, mute)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("mute_volume", self.zone_id, mute)
 
     async def async_media_seek(self, position: int):
-        await self.coordinator.data.player_action(self.zone_id, "Position", position)
-        self._media_position_updated_at = utcnow()
-        await self.coordinator.async_refresh()
+        await self.coordinator.command(
+            "player_action", self.zone_id, "Position", position
+        )
 
     async def async_media_previous_track(self):
-        await self.coordinator.data.player_action(self.zone_id, "previous")
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("player_action", self.zone_id, "previous")
 
     async def async_media_next_track(self):
-        await self.coordinator.data.player_action(self.zone_id, "next")
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("player_action", self.zone_id, "next")
 
     async def async_media_play(self):
-        await self.coordinator.data.player_action(self.zone_id, "play")
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("player_action", self.zone_id, "play")
 
     async def async_media_pause(self):
-        await self.coordinator.data.player_action(self.zone_id, "pause")
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("player_action", self.zone_id, "pause")
 
     async def async_media_stop(self):
-        await self.coordinator.data.player_action(self.zone_id, "stop")
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("player_action", self.zone_id, "stop")
 
     async def async_set_shuffle(self, shuffle: bool):
-        flag = f"ShuffleMode={'true' if shuffle else 'false'}"
-        await self.coordinator.data.player_action(self.zone_id, "shuffle", flag)
-        await self.coordinator.async_refresh()
+        flag = shuffle
+        await self.coordinator.command("player_action", self.zone_id, "shuffle", flag)
 
     async def async_select_source(self, source: str):
         for src in self.coordinator.data.sources:
-            if src.Name == source:
-                await self.coordinator.data.change_source(self.zone_id, src.SourceID)
-                await self.coordinator.async_refresh()
+            if (
+                src.Name == source
+                and not src.Hidden
+                and self._source_enabled(src.SourceID)
+            ):
+                await self.coordinator.command(
+                    "change_source", self.zone_id, src.SourceID
+                )
                 await self.sync_master()
                 return
+        raise ServiceValidationError(f"Source is not available in this zone: {source}")
 
     async def async_join_players(self, group_members: list[str]):
         """Join this player with others."""
-        await self.coordinator.data.zone_master(self.zone_id, True)
-        for ent in self._casatunes_entities():
-            if ent.entity_id in group_members and ent != self:
-                await self.coordinator.data.zone_join(self.zone_id, ent.zone_id)
-        await self.coordinator.async_refresh()
-        await self.sync_master()
+        entities = {
+            ent.entity_id: ent for ent in self._casatunes_entities() if ent.available
+        }
+        if any(member not in entities for member in group_members):
+            raise ServiceValidationError(
+                "All grouped players must belong to this CasaTunes server"
+            )
+        members = [
+            entities[member] for member in group_members if member != self.entity_id
+        ]
+        if not members:
+            return
+        await self.coordinator.command("zone_master", self.zone_id, True)
+        for ent in members:
+            await self.coordinator.command("zone_join", self.zone_id, ent.zone_id)
 
     async def async_unjoin_player(self):
-        """Remove this player from its group."""
+        """Detach clients, or dissolve a group when its leader leaves."""
         master = self.zone_master
-        if master is not None:
-            await self.coordinator.data.zone_unjoin(master, self.zone_id)
-            await self.coordinator.async_refresh()
-            await self.sync_master()
+        if master is None:
+            return
+        if self.is_master:
+            for ent in self._group_entities():
+                if ent is not self:
+                    await self.coordinator.command("zone_unjoin", master, ent.zone_id)
+        else:
+            await self.coordinator.command("zone_unjoin", master, self.zone_id)
+        leader = next(
+            (ent for ent in self._casatunes_entities() if ent.zone_id == master), None
+        )
+        if leader is not None and not any(
+            ent.is_client for ent in leader._group_entities()
+        ):
+            await self.coordinator.command("zone_master", master, False)
 
     async def async_browse_media(
         self,
@@ -558,33 +623,51 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
 
     async def async_play_media(self, media_type, media_id, **kwargs):
         """Play the given media."""
-        _LOGGER.debug("Playback request for %s / %s", media_type, media_id)
-        await self.coordinator.data.play_media(self.zone_id, media_id)
-        await self.coordinator.async_refresh()
+        if kwargs.get("announce"):
+            raise ServiceValidationError(
+                "URL announcements are not supported; use casatunes.tts"
+            )
+        enqueue = kwargs.get("enqueue")
+        modes = {
+            None: None,
+            MediaPlayerEnqueue.REPLACE: "playNow",
+            MediaPlayerEnqueue.ADD: "add",
+            MediaPlayerEnqueue.PLAY: "addplay",
+        }
+        if enqueue not in modes:
+            raise ServiceValidationError(
+                "CasaTunes does not support inserting media next"
+            )
+        if media_type not in (
+            "library",
+            MediaType.TRACK,
+            MediaType.MUSIC,
+            MediaType.PLAYLIST,
+        ):
+            raise ServiceValidationError("Use a CasaTunes media ID from Browse Media")
+        await self.coordinator.command(
+            "play_media", self.zone_id, media_id, add_to_queue=modes[enqueue]
+        )
 
     async def async_clear_playlist(self):
         """Clear the current playlist."""
-        await self.coordinator.data.clear_zone_queue(self.zone_id)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("clear_zone_queue", self.zone_id)
 
     async def search(self, **service_data):
         """Search for media and play or queue the best match."""
         search_text = _build_search_text(service_data)
-        result = await self.coordinator.data.search_media(self.zone_id, search_text)
+        result = await self.coordinator.client.search_media(self.zone_id, search_text)
         item = _best_search_item(result, service_data)
         if item is None:
-            raise HomeAssistantError(f"No CasaTunes media found for {search_text}")
+            raise ServiceValidationError(f"No CasaTunes media found for {search_text}")
 
         mode = service_data.get(ATTR_MODE, DEFAULT_QUEUE_MODE)
-        await self.coordinator.data.queue_media(self.zone_id, item["ID"], mode)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("queue_media", self.zone_id, item["ID"], mode)
 
     async def async_tts(self, **service_data):
         """Play text-to-speech in this zone."""
-        await self.coordinator.data.tts(self.zone_id, service_data)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("tts", self.zone_id, service_data)
 
     async def async_doorbell(self, **service_data):
         """Play a doorbell chime in this zone."""
-        await self.coordinator.data.doorbell(self.zone_id, service_data)
-        await self.coordinator.async_refresh()
+        await self.coordinator.command("doorbell", self.zone_id, service_data)

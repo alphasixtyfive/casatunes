@@ -3,25 +3,38 @@
   "config": {
     "step": {
       "user": {
-        "title": "[%key:common::config_flow::title:via_hassio_addon%]",
+        "title": "Connect to CasaTunes",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]"
+          "host": "Host"
         }
       },
       "discovery_confirm": {
         "title": "CasaTunes",
-        "description": "[%key:common::description::confirm_setup%]"
+        "description": "Set up {name}?"
       },
-      "reauth_confirm": {
-        "title": "[%key:common::config_flow::title::reauth%]",
+      "reconfigure": {
+        "title": "Change CasaTunes address",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]"
+          "host": "Host"
         }
       }
     },
+    "error": {
+      "cannot_connect": "Unable to connect to CasaTunes.",
+      "unknown": "Unexpected connection error."
+    },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_account%]",
-      "already_in_progress": "[%key:common::config_flow::abort::already_in_progress%]"
+      "already_configured": "This CasaTunes server is already configured.",
+      "already_in_progress": "Setup is already in progress.",
+      "cannot_connect": "Unable to connect to CasaTunes.",
+      "unknown": "Unexpected connection error.",
+      "unique_id_mismatch": "This address belongs to a different CasaTunes server.",
+      "reconfigure_successful": "CasaTunes address updated."
+    }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "CasaTunes could not complete the command. Check that the server is reachable and the selected source supports this action."
     }
   }
 }

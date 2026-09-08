@@ -1,23 +1,136 @@
 """Compatibility helpers for the CasaTunes API client."""
+
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
+from time import monotonic
 from typing import Any, TypeVar
 from urllib.parse import quote, urlencode
 
-from aiohttp import ClientResponse
-from pycasatunes import CasaTunes
+from aiohttp import ClientError, ClientSession, ClientTimeout
 from pycasatunes.const import API_PORT
 from pycasatunes.exceptions import CasaException
 from pycasatunes.objects.nowplaying import CasaTunesNowPlaying
 from pycasatunes.objects.source import CasaTunesSource
+from pycasatunes.objects.system import CasaTunesSystem
 from pycasatunes.objects.zone import CasaTunesZone
 
 _CasaTunesObjectT = TypeVar("_CasaTunesObjectT")
 
 
-class CasaTunesClient(CasaTunes):
+_LOGGER = logging.getLogger(__name__)
+REQUEST_TIMEOUT = ClientTimeout(total=10)
+
+
+@dataclass(frozen=True)
+class CasaTunesData:
+    """A complete poll; never publish partially updated collections."""
+
+    system: CasaTunesSystem
+    zones: list[CasaTunesZone]
+    zones_dict: dict
+    sources: list[CasaTunesSource]
+    sources_dict: dict
+    nowplaying_dict: dict
+
+
+class CasaTunesClient:
     """CasaTunes client with defensive response parsing."""
+
+    def __init__(self, client: ClientSession, host: str) -> None:
+        self._client = client
+        self._host = host
+        self._static_at = 0.0
+        self.data: CasaTunesData | None = None
+
+    async def fetch(self) -> CasaTunesData:
+        """Refresh live state, caching system/source metadata for five minutes."""
+        old = self.data
+        refresh_static = old is None or monotonic() - self._static_at >= 300
+        try:
+            zones_raw = await self._get_json("/api/v1/zones")
+            playing_raw = await self._get_json("/api/v1/sources/nowplaying")
+            if refresh_static:
+                system_raw = await self._get_json("/api/v1/system/info")
+                if not isinstance(system_raw, dict) or not system_raw.get("MACAddress"):
+                    raise CasaException("System response missing MAC address")
+                system = CasaTunesSystem(self._client, system_raw)
+                sources_raw = await self._get_json("/api/v1/sources")
+                sources = [
+                    CasaTunesSource(self._client, x)
+                    for x in self._normalize_collection(
+                        sources_raw, "sources", "SourceID"
+                    )
+                ]
+            else:
+                system, sources = old.system, old.sources
+            zones = [
+                CasaTunesZone(self._client, x)
+                for x in self._normalize_collection(zones_raw, "zones", "ZoneID")
+            ]
+            playing = [
+                CasaTunesNowPlaying(self._client, x)
+                for x in self._normalize_collection(
+                    playing_raw, "nowplaying", "SourceID"
+                )
+            ]
+            data = CasaTunesData(
+                system,
+                zones,
+                self._index_by(zones, "ZoneID"),
+                sources,
+                self._index_by(sources, "SourceID"),
+                self._index_by(playing, "SourceID"),
+            )
+        except (CasaException, ClientError, TimeoutError):
+            self._static_at = 0
+            raise
+        self.data = data
+        if refresh_static:
+            self._static_at = monotonic()
+        return data
+
+    async def set_zone(self, zone_id: int | str, **params: Any) -> Any:
+        """Set zone properties; log power intent without personal media data."""
+        if "Power" in params:
+            _LOGGER.debug("Power command: zone=%s power=%s", zone_id, params["Power"])
+        return await self._get_json(
+            f"/api/v1/zones/{quote(str(zone_id), safe='')}", params
+        )
+
+    async def turn_on(self, zone_id):
+        return await self.set_zone(zone_id, Power="on")
+
+    async def turn_off(self, zone_id):
+        return await self.set_zone(zone_id, Power="off")
+
+    async def set_volume_level(self, zone_id, volume):
+        return await self.set_zone(zone_id, Volume=volume)
+
+    async def mute_volume(self, zone_id, mute):
+        return await self.set_zone(zone_id, Mute=mute)
+
+    async def change_source(self, zone_id, source):
+        return await self.set_zone(zone_id, SourceID=source)
+
+    async def zone_master(self, zone_id, mode):
+        return await self.set_zone(zone_id, MasterMode=mode)
+
+    async def zone_join(self, zone_id, client_zone_id):
+        return await self._get_json(f"/api/v1/zones/{zone_id}/group/{client_zone_id}")
+
+    async def zone_unjoin(self, zone_id, client_zone_id):
+        return await self._get_json(f"/api/v1/zones/{zone_id}/ungroup/{client_zone_id}")
+
+    async def player_action(self, zone_id, action, option=None):
+        path = f"/api/v1/zones/{zone_id}/player/{quote(action.lower(), safe='')}"
+        if option is not None:
+            if isinstance(option, bool):
+                option = str(option).lower()
+            path += f"/{quote(str(option), safe='')}"
+        return await self._get_json(path)
 
     @staticmethod
     def _clean_params(params: Mapping[str, Any] | None) -> dict[str, str]:
@@ -43,17 +156,27 @@ class CasaTunesClient(CasaTunes):
         if query:
             path = f"{path}?{query}"
 
-        response: ClientResponse = await self._client.get(
-            f"http://{self._host}:{API_PORT}{path}"
-        )
-        response.raise_for_status()
         try:
-            payload = await response.json()
-        except Exception as exception:
+            async with self._client.get(
+                f"http://{self._host}:{API_PORT}{path}", timeout=REQUEST_TIMEOUT
+            ) as response:
+                response.raise_for_status()
+                payload = await response.json()
+        except (ValueError, ClientError, TimeoutError) as exception:
             raise CasaException(
-                "CasaTunes returned an invalid JSON response"
+                f"CasaTunes request failed ({type(exception).__name__})"
             ) from exception
-        self.logger.debug(payload)
+        if isinstance(payload, dict):
+            error = payload.get("Error")
+            if error and (
+                not isinstance(error, dict)
+                or error.get("Message")
+                or error.get("Symbol")
+                or (error.get("HttpStatus") or 0) >= 400
+            ):
+                raise CasaException("CasaTunes rejected the requested operation")
+            if payload.get("Result") is False:
+                raise CasaException("CasaTunes reported an unsuccessful operation")
         return payload
 
     @staticmethod
@@ -100,7 +223,27 @@ class CasaTunesClient(CasaTunes):
         if not all(isinstance(item, Mapping) for item in items):
             raise CasaException(f"Unexpected CasaTunes {collection_name} item type")
 
-        return [dict(item) for item in items]
+        result = []
+        seen = set()
+        for item in items:
+            item = dict(item)
+            try:
+                if isinstance(item.get(id_key), bool):
+                    raise ValueError
+                item[id_key] = int(item[id_key])
+            except (KeyError, TypeError, ValueError) as err:
+                raise CasaException(f"Invalid {id_key}") from err
+            if item[id_key] in seen:
+                raise CasaException(f"Duplicate {id_key}")
+            seen.add(item[id_key])
+            if collection_name == "zones" and not isinstance(item.get("Power"), bool):
+                raise CasaException("Zone response missing valid Power")
+            if collection_name == "nowplaying" and not isinstance(
+                item.get("CurrSong"), dict
+            ):
+                item["CurrSong"] = {}
+            result.append(item)
+        return result
 
     @staticmethod
     def _index_by(
@@ -124,33 +267,6 @@ class CasaTunesClient(CasaTunes):
         if image.startswith("/"):
             return f"http://{self._host}:{API_PORT}{image}"
         return f"http://{self._host}:{API_PORT}/api/v1/images/{quote(image, safe='')}"
-
-    async def get_zones(self) -> None:
-        """Get zones."""
-        payload = await self._get_json("/api/v1/zones")
-        self._zones = [
-            CasaTunesZone(self._client, zone)
-            for zone in self._normalize_collection(payload, "zones", "ZoneID")
-        ]
-        self._zones_dict = self._index_by(self._zones, "ZoneID")
-
-    async def get_sources(self) -> None:
-        """Get sources."""
-        payload = await self._get_json("/api/v1/sources")
-        self._sources = [
-            CasaTunesSource(self._client, source)
-            for source in self._normalize_collection(payload, "sources", "SourceID")
-        ]
-        self._sources_dict = self._index_by(self._sources, "SourceID")
-
-    async def get_nowplaying(self) -> None:
-        """Get now playing information."""
-        payload = await self._get_json("/api/v1/sources/nowplaying")
-        self._nowplaying = [
-            CasaTunesNowPlaying(self._client, item)
-            for item in self._normalize_collection(payload, "nowplaying", "SourceID")
-        ]
-        self._nowplaying_dict = self._index_by(self._nowplaying, "SourceID")
 
     async def get_media(self, opts: Mapping[str, Any]) -> dict[str, Any]:
         """Get media items for a zone or collection."""

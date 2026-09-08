@@ -1,156 +1,60 @@
 """The CasaTunes integration."""
-from __future__ import annotations
 
-from datetime import timedelta
-import logging
-
-from aiohttp import ClientError
-from pycasatunes.exceptions import CasaException
-from pycasatunes.objects.system import CasaTunesSystem
-from pycasatunes.objects.zone import CasaTunesZone
-import voluptuous as vol
-
-from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.const import CONF_HOST
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import service
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
+
 from .api import CasaTunesClient
 from .const import DOMAIN
+from .coordinator import CasaTunesDataUpdateCoordinator
 
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Required(CONF_HOST): cv.string,
-            }
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+PLATFORMS = [Platform.MEDIA_PLAYER]
+CasaTunesConfigEntry = ConfigEntry[CasaTunesDataUpdateCoordinator]
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register actions even when the server is unavailable."""
+    from .media_player import DOORBELL_SCHEMA, SEARCH_SCHEMA, TTS_SCHEMA
+
+    for name, schema, method in (
+        ("search", SEARCH_SCHEMA, "search"),
+        ("tts", TTS_SCHEMA, "async_tts"),
+        ("doorbell", DOORBELL_SCHEMA, "async_doorbell"),
+    ):
+        service.async_register_platform_entity_service(
+            hass,
+            DOMAIN,
+            name,
+            entity_domain=Platform.MEDIA_PLAYER,
+            schema=schema,
+            func=method,
         )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
-
-PLATFORMS = [MEDIA_PLAYER_DOMAIN]
-_LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=15)
-UPDATE_ERRORS = (CasaException, ClientError, TimeoutError)
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up CasaTunes from a config entry."""
-
-    client = CasaTunesClient(async_get_clientsession(hass), entry.data[CONF_HOST])
-    coordinator = CasaTunesDataUpdateCoordinator(hass, client=client)
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = coordinator
-
-    # Fetch initial data so we have data when entities subscribe
-    await coordinator.async_config_entry_first_refresh()
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-
-    return unload_ok
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
-
-
-class CasaTunesDataUpdateCoordinator(DataUpdateCoordinator[CasaTunesClient]):
-    """Class to manage fetching data from the API."""
-
-    def __init__(self, hass: HomeAssistant, client: CasaTunesClient) -> None:
-        """Initialize."""
-        self.casatunes = client
-
-        super().__init__(
-            hass,
-            logger=_LOGGER,
-            name=DOMAIN,
-            update_method=self._async_update_data,
-            update_interval=SCAN_INTERVAL,
-        )
-        self.entities: list[CasaTunesDeviceEntity] = []
-
-    async def _async_update_data(self) -> CasaTunesClient:
-        """Update data via library."""
-        try:
-            await self.casatunes.fetch()
-        except UPDATE_ERRORS as exception:
-            raise UpdateFailed("Error communicating with CasaTunes") from exception
-
-        return self.casatunes
+async def async_setup_entry(hass: HomeAssistant, entry: CasaTunesConfigEntry) -> bool:
+    """Connect before creating entities."""
+    coordinator = CasaTunesDataUpdateCoordinator(
+        hass,
+        entry,
+        CasaTunesClient(async_get_clientsession(hass), entry.data[CONF_HOST]),
+    )
+    await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = coordinator
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    return True
 
 
-class CasaTunesEntity(CoordinatorEntity):
-    """Defines a base CasaTunes entity."""
-
-    def __init__(
-        self,
-        coordinator: CasaTunesDataUpdateCoordinator,
-        zone: CasaTunesZone,
-        device_id: str,
-        zone_id: str,
-    ) -> None:
-        """Initialize the CasaTunes entity."""
-        super().__init__(coordinator)
-        self._zone_id = zone_id
-        self._zone = zone
-        self._device_id = device_id
-        self._name = zone.Name
-
-    @property
-    def zone_id(self) -> str:
-        """Return the zone_id of the entity."""
-        return self._zone_id
-
-    @property
-    def name(self) -> str:
-        """Return the name of the entity."""
-        return self._name
-
-    @property
-    def system(self) -> CasaTunesSystem:
-        """Get the CasaTunes System."""
-        return self.coordinator.data.system
-
-    @property
-    def zone(self) -> CasaTunesZone:
-        """Get the CasaTunes Zones."""
-        return self.coordinator.data.zones_dict[self._zone_id]
+async def async_unload_entry(hass: HomeAssistant, entry: CasaTunesConfigEntry) -> bool:
+    """Unload through the config-entry lifecycle."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-class CasaTunesDeviceEntity(CasaTunesEntity):
-    """Defines a CasaTunes device entity."""
-
-    @property
-    def device_info(self) -> DeviceInfo | None:
-        """Return device information about this CasaTunes device."""
-        if not self._device_id:
-            return None
-
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_id)},
-            manufacturer="CasaTunes",
-            name=self._name,
-            sw_version=self.system.CasaTunesVersion,
-        )
+async def async_reload_entry(hass: HomeAssistant, entry: CasaTunesConfigEntry) -> None:
+    """Let Home Assistant manage unload failures and retries."""
+    await hass.config_entries.async_reload(entry.entry_id)
