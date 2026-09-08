@@ -1,9 +1,12 @@
 """Support for CasaTunes media browsing."""
-from typing import Any
+
 import logging
+from typing import Any
 
 from homeassistant.components.media_player import BrowseMedia, MediaClass, MediaType
 from homeassistant.components.media_player.errors import BrowseError
+
+from .models import CasaException
 
 
 class UnknownMediaType(BrowseError):
@@ -28,7 +31,7 @@ async def build_item_response(
             return await library_payload(casa_server, zone_id, media_content_id)
         raise UnknownMediaType
 
-    except UnknownMediaType as err:
+    except (UnknownMediaType, CasaException) as err:
         raise BrowseError(
             f"Media not found: {media_content_type} / {media_content_id}"
         ) from err
@@ -50,7 +53,7 @@ async def item_payload(casa_server, item):
     image_id = item.get("ArtworkURI")
     if image_id:
         image_id = str(image_id)
-        thumbnail = casa_server.data.image_url(image_id)
+        thumbnail = casa_server.client.image_url(image_id)
 
     flags = _media_flags(item)
 
@@ -59,7 +62,7 @@ async def item_payload(casa_server, item):
         media_class = MediaClass.PLAYLIST
         can_play = True
         can_expand = True
-    elif (flags & CT_COLLECTION):
+    elif flags & CT_COLLECTION:
         media_content_type = "library"
         media_class = MediaClass.DIRECTORY
         can_play = False
@@ -98,7 +101,9 @@ async def library_payload(casa_server, zone_id, media_content_id):
         opts["item_id"] = media_content_id
         content_id = media_content_id
 
-    result_detail = await casa_server.data.get_media(opts)
+    result_detail = await casa_server.client.get_media(opts)
+    if not isinstance(result_detail, dict):
+        raise BrowseError("Invalid CasaTunes media collection")
     _LOGGER.debug("Result detail %s", result_detail)
 
     list_title = result_detail.get("Title", "Browse Media")

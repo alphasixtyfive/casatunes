@@ -1,26 +1,40 @@
 {
-    "title": "CasaTunes",
-    "config": {
-        "step": {
-            "user": {
-                "title": "Fill in your CasaTunes IP Address",
-                "data": {
-                    "host": "CasaTunes IP Address"
-                }
-            },
-            "discovery_confirm": {
-                "description": "Do you want to start set up?"
-            },
-            "reauth_confirm": {
-                "title": "Fill in your CasaTunes IP Address",
-                "data": {
-                    "host": "CasaTunes IP Address"
-                }
-            }
-        },
-        "abort": {
-            "already_configured": "Already configured. Only a single configuration possible.",
-            "already_in_progress": "Already in progress."
+  "title": "CasaTunes",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to CasaTunes",
+        "data": {
+          "host": "Host"
         }
+      },
+      "discovery_confirm": {
+        "title": "CasaTunes",
+        "description": "Set up {name}?"
+      },
+      "reconfigure": {
+        "title": "Change CasaTunes address",
+        "data": {
+          "host": "Host"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to CasaTunes.",
+      "unknown": "Unexpected connection error."
+    },
+    "abort": {
+      "already_configured": "This CasaTunes server is already configured.",
+      "already_in_progress": "Setup is already in progress.",
+      "cannot_connect": "Unable to connect to CasaTunes.",
+      "unknown": "Unexpected connection error.",
+      "unique_id_mismatch": "This address belongs to a different CasaTunes server.",
+      "reconfigure_successful": "CasaTunes address updated."
     }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "CasaTunes could not complete the command. Check that the server is reachable and the selected source supports this action."
+    }
+  }
 }

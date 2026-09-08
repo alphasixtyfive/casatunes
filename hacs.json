@@ -1,6 +1,6 @@
 {
   "name": "CasaTunes",
+  "homeassistant": "2026.9.0",
   "country": "US",
-  "domains": "media_player",
   "render_readme": true
 }
