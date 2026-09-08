@@ -291,3 +291,32 @@ async def test_diagnostics_redacts_identity(hass):
     assert "aa:bb" not in str(result)
     assert "Study" not in str(result)
     assert result["zones"][0]["power"] is True
+
+
+async def test_group_members_and_last_client_cleanup(hass):
+    from pycasatunes.objects.zone import CasaTunesZone
+
+    master = await player(hass)
+    coordinator = master.coordinator
+    master.zone.attributes.update({"MasterMode": True, "SharedRoomID": 42})
+    zone = CasaTunesZone(None, {"ZoneID": 2, "Power": True, "SharedRoomID": 42})
+    coordinator.data.zones.append(zone)
+    coordinator.data.zones_dict[2] = zone
+    client = CasaTunesMediaPlayer(coordinator, zone, "aa:bb:cc:dd:ee:ff")
+    client.entity_id = "media_player.client"
+    client.hass = hass
+    coordinator.entities.append(client)
+    assert (
+        master.group_members
+        == client.group_members
+        == ["media_player.study", "media_player.client"]
+    )
+
+    async def refresh():
+        zone.attributes["SharedRoomID"] = 0
+
+    coordinator.async_refresh = AsyncMock(side_effect=refresh)
+    await client.async_unjoin_player()
+    coordinator.client.zone_unjoin.assert_awaited_once_with(5, 2)
+    coordinator.async_refresh.assert_awaited_once()
+    coordinator.client.zone_master.assert_awaited_once_with(5, False)

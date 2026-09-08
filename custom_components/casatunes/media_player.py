@@ -502,14 +502,6 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
                 return z.ZoneID
         return None
 
-    async def sync_master(self):
-        """Ensure master status is correct after unjoin/join."""
-        if not any(ent.is_client for ent in self._group_entities()):
-            master = self.zone_master
-            if master is not None:
-                await self.coordinator.command("zone_master", master, False)
-                _LOGGER.debug("Zone %s is no longer master.", master)
-
     async def async_turn_on(self):
         await self.coordinator.command("turn_on", self.zone_id)
 
@@ -558,7 +550,6 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
                 await self.coordinator.command(
                     "change_source", self.zone_id, src.SourceID
                 )
-                await self.sync_master()
                 return
         raise ServiceValidationError(f"Source is not available in this zone: {source}")
 
@@ -591,6 +582,10 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
                     await self.coordinator.command("zone_unjoin", master, ent.zone_id)
         else:
             await self.coordinator.command("zone_unjoin", master, self.zone_id)
+        # Group cleanup depends on the completed mutation, so bypass debounce here.
+        await self.coordinator.async_refresh()
+        if not self.coordinator.last_update_success:
+            return
         leader = next(
             (ent for ent in self._casatunes_entities() if ent.zone_id == master), None
         )
