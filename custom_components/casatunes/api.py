@@ -10,17 +10,20 @@ from typing import Any, TypeVar
 from urllib.parse import quote, urlencode
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
-from pycasatunes.const import API_PORT
-from pycasatunes.exceptions import CasaException
-from pycasatunes.objects.nowplaying import CasaTunesNowPlaying
-from pycasatunes.objects.source import CasaTunesSource
-from pycasatunes.objects.system import CasaTunesSystem
-from pycasatunes.objects.zone import CasaTunesZone
+
+from .models import (
+    CasaException,
+    CasaTunesNowPlaying,
+    CasaTunesSource,
+    CasaTunesSystem,
+    CasaTunesZone,
+)
 
 _CasaTunesObjectT = TypeVar("_CasaTunesObjectT")
 
 
 _LOGGER = logging.getLogger(__name__)
+API_PORT = 8735
 REQUEST_TIMEOUT = ClientTimeout(total=10)
 
 

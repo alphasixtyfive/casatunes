@@ -18,10 +18,10 @@ from homeassistant.helpers.service_info.ssdp import (
     ATTR_UPNP_FRIENDLY_NAME,
     SsdpServiceInfo,
 )
-from pycasatunes.exceptions import CasaException
 
 from .api import CasaTunesClient
 from .const import DOMAIN
+from .models import CasaException
 
 _LOGGER = logging.getLogger(__name__)
 CONNECT_ERRORS = (CasaException, ClientError, TimeoutError)

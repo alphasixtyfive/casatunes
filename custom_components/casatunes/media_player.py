@@ -21,7 +21,6 @@ from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from pycasatunes.objects.zone import CasaTunesZone
 
 from .browse_media import CT_ALLOWSELECT, CT_COLLECTION, build_item_response
 from .const import (
@@ -42,6 +41,7 @@ from .const import (
 )
 from .coordinator import CasaTunesDataUpdateCoordinator
 from .entity import CasaTunesDeviceEntity
+from .models import CasaTunesZone
 
 _LOGGER = logging.getLogger(__name__)
 

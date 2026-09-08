@@ -8,10 +8,10 @@ from aiohttp import ClientError
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util.dt import utcnow
-from pycasatunes.exceptions import CasaException
 
 from .api import CasaTunesClient, CasaTunesData
 from .const import DOMAIN
+from .models import CasaException
 
 _LOGGER = logging.getLogger(__name__)
 

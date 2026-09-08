@@ -8,10 +8,7 @@
   "documentation": "https://github.com/alphasixtyfive/casatunes",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/alphasixtyfive/casatunes/issues",
-  "requirements": [
-    "pycasatunes==0.1.3",
-    "async-timeout==5.0.1"
-  ],
+  "requirements": [],
   "ssdp": [
     {
       "deviceType": "urn:schemas-upnp-org:device:MediaRenderer:1",

@@ -10,12 +10,12 @@ from homeassistant.components.media_player import MediaPlayerEntityFeature as F
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.service_info.ssdp import SsdpServiceInfo
 from homeassistant.util.dt import utcnow
-from pycasatunes.exceptions import CasaException
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.casatunes.api import CasaTunesClient
 from custom_components.casatunes.coordinator import CasaTunesDataUpdateCoordinator
 from custom_components.casatunes.media_player import CasaTunesMediaPlayer
+from custom_components.casatunes.models import CasaException
 
 
 async def snapshot(power=True, status=0, controls=511, source_type=1):
@@ -294,7 +294,7 @@ async def test_diagnostics_redacts_identity(hass):
 
 
 async def test_group_members_and_last_client_cleanup(hass):
-    from pycasatunes.objects.zone import CasaTunesZone
+    from custom_components.casatunes.models import CasaTunesZone
 
     master = await player(hass)
     coordinator = master.coordinator

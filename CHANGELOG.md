@@ -3,6 +3,7 @@
 ## 0.2.0
 
 - Replace inherited network methods with one validated, bounded HTTP transport.
+- Remove the legacy pycasatunes dependency; use local REST data models and HA's shared aiohttp session.
 - Preserve zone unique IDs and native search, TTS and doorbell services.
 - Use typed runtime data and current Home Assistant service/discovery interfaces.
 - Publish complete poll snapshots and cache system/source metadata.

@@ -5,7 +5,8 @@ from typing import Any
 
 from homeassistant.components.media_player import BrowseMedia, MediaClass, MediaType
 from homeassistant.components.media_player.errors import BrowseError
-from pycasatunes.exceptions import CasaException
+
+from .models import CasaException
 
 
 class UnknownMediaType(BrowseError):

@@ -2,19 +2,23 @@
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import ClientError
-from pycasatunes.exceptions import CasaException
 
+package = types.ModuleType("casatunes_transport")
+package.__path__ = [str(Path(__file__).parents[1] / "custom_components/casatunes")]
+sys.modules[package.__name__] = package
 spec = importlib.util.spec_from_file_location(
-    "casatunes_api", Path(__file__).parents[1] / "custom_components/casatunes/api.py"
+    "casatunes_transport.api", Path(package.__path__[0]) / "api.py"
 )
 api = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = api
 spec.loader.exec_module(api)
+CasaException = api.CasaException
 
 
 class Response:
