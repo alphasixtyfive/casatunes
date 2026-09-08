@@ -42,7 +42,13 @@ async def snapshot(power=True, status=0, controls=511, source_type=1):
             ],
             {"MACAddress": "aa:bb:cc:dd:ee:ff", "AppName": "CasaTunes"},
             [
-                {"SourceID": 3, "Name": "PCs", "MediaTypesSupported": source_type},
+                {
+                    "SourceID": 3,
+                    "Name": "PCs",
+                    "Type": source_type,
+                    "SourceType": 6 if source_type == 1 else 9,
+                    "MediaTypesSupported": 33024 if source_type == 1 else 0,
+                },
                 {"SourceID": 0, "Name": "Other", "MediaTypesSupported": 1},
             ],
         ]
@@ -122,10 +128,18 @@ async def test_cross_server_group_rejected_before_commands(hass):
 
 async def test_shuffle_and_power(hass):
     ent = await player(hass)
+    assert ent.supported_features & F.SHUFFLE_SET
+    assert ent.supported_features & F.BROWSE_MEDIA
     await ent.async_set_shuffle(True)
     ent.coordinator.client.player_action.assert_awaited_once_with(5, "shuffle", True)
     await ent.async_turn_on()
     ent.coordinator.client.turn_on.assert_awaited_once_with(5)
+
+
+async def test_volume_rounding(hass):
+    ent = await player(hass)
+    await ent.async_set_volume_level(0.29)
+    ent.coordinator.client.set_volume_level.assert_awaited_once_with(5, 29)
 
 
 async def test_action_errors(hass):

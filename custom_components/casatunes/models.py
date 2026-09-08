@@ -123,6 +123,10 @@ class CasaTunesSource(CasaTunesObject):
     def Type(self):
         return self.attributes.get("Type", None)
 
+    @property
+    def SourceType(self):
+        return self.attributes.get("SourceType")
+
 
 class CasaTunesNowPlaying(CasaTunesObject):
     """Read-only accessors for NowPlaying data."""

@@ -320,7 +320,18 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
             if self.zone.VolumeControlType != 2:
                 features |= MediaPlayerEntityFeature.VOLUME_SET
         source = self.coordinator.data.sources_dict.get(self.zone.SourceID)
-        if source is None or not ((source.MediaTypesSupported or 0) & 1):
+        # Current servers put player/tuner/external classification in Type.
+        # Older CasaDev enum pages label that mask MediaTypesSupported.
+        player_type = (
+            (
+                (source.Type or 0)
+                if source.SourceType is not None
+                else (source.MediaTypesSupported or 0)
+            )
+            if source
+            else 0
+        )
+        if not player_type & 1:
             return features
         features |= (
             MediaPlayerEntityFeature.BROWSE_MEDIA
@@ -510,7 +521,7 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
 
     async def async_set_volume_level(self, volume: float):
         await self.coordinator.command(
-            "set_volume_level", self.zone_id, int(volume * 100)
+            "set_volume_level", self.zone_id, round(volume * 100)
         )
 
     async def async_mute_volume(self, mute: bool):
