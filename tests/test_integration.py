@@ -181,3 +181,113 @@ async def test_user_flow_unreachable(hass, enable_custom_integrations):
             "casatunes", context={"source": "user"}, data={"host": "server"}
         )
     assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_wrong_server(hass, enable_custom_integrations):
+    entry = MockConfigEntry(
+        domain="casatunes", data={"host": "old"}, unique_id="different"
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.casatunes.api.CasaTunesClient.fetch",
+        return_value=await snapshot(),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            "casatunes",
+            context={"source": "reconfigure", "entry_id": entry.entry_id},
+            data={"host": "new"},
+        )
+    assert result["type"] == "abort"
+    assert result["reason"] == "unique_id_mismatch"
+    assert entry.data["host"] == "old"
+
+
+async def test_duplicate_user_flow(hass, enable_custom_integrations):
+    entry = MockConfigEntry(
+        domain="casatunes", data={"host": "server"}, unique_id="aa:bb:cc:dd:ee:ff"
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.casatunes.api.CasaTunesClient.fetch",
+        return_value=await snapshot(),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            "casatunes", context={"source": "user"}, data={"host": "server"}
+        )
+    assert result["reason"] == "already_configured"
+
+
+async def test_setup_retry(hass, enable_custom_integrations):
+    entry = MockConfigEntry(domain="casatunes", data={"host": "server"})
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.casatunes.api.CasaTunesClient.fetch",
+        side_effect=CasaException("offline"),
+    ):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state.value == "setup_retry"
+    assert hass.services.has_service("casatunes", "tts")
+
+
+async def test_relative_volume_and_fixed_output(hass):
+    ent = await player(hass)
+    ent.zone.attributes["VolumeControlType"] = 2
+    assert ent.supported_features & F.VOLUME_STEP
+    assert not ent.supported_features & F.VOLUME_SET
+    await ent.async_volume_up()
+    ent.coordinator.client.set_zone.assert_awaited_once_with(5, AdjustVolume=1)
+    ent.zone.attributes["FixedVolumeEnabled"] = True
+    assert not ent.supported_features & F.VOLUME_STEP
+
+
+@pytest.mark.parametrize(
+    "enqueue,expected", [("replace", "playNow"), ("add", "add"), ("play", "addplay")]
+)
+async def test_queue_modes(hass, enqueue, expected):
+    ent = await player(hass)
+    await ent.async_play_media("track", "id", enqueue=enqueue)
+    ent.coordinator.client.play_media.assert_awaited_once_with(
+        5, "id", add_to_queue=expected
+    )
+
+
+async def test_unsupported_queue_mode_no_command(hass):
+    ent = await player(hass)
+    with pytest.raises(ServiceValidationError):
+        await ent.async_play_media("track", "id", enqueue="next")
+    ent.coordinator.client.play_media.assert_not_called()
+
+
+async def test_browse_and_api_error(hass):
+    from homeassistant.components.media_player.errors import BrowseError
+
+    from custom_components.casatunes.browse_media import build_item_response
+
+    ent = await player(hass)
+    ent.coordinator.client.get_media.return_value = {
+        "MediaItems": [
+            {"ID": "album", "Title": "Album", "Flags": 8200},
+            {"ID": "song", "Title": "Song", "Flags": 8193},
+        ]
+    }
+    result = await build_item_response(5, ent.coordinator)
+    assert len(result.children) == 2
+    assert result.children[0].can_play and result.children[0].can_expand
+    ent.coordinator.client.get_media.side_effect = CasaException("offline")
+    with pytest.raises(BrowseError):
+        await build_item_response(5, ent.coordinator)
+
+
+async def test_diagnostics_redacts_identity(hass):
+    from custom_components.casatunes.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    ent = await player(hass)
+    result = await async_get_config_entry_diagnostics(
+        hass, type("Entry", (), {"runtime_data": ent.coordinator})()
+    )
+    assert "aa:bb" not in str(result)
+    assert "Study" not in str(result)
+    assert result["zones"][0]["power"] is True

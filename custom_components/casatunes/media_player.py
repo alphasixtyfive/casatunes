@@ -17,6 +17,7 @@ from homeassistant.components.media_player import (
     MediaType,
     RepeatMode,
 )
+from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -190,36 +191,26 @@ STATUS_TO_STATE = {
     5: MediaPlayerState.BUFFERING,
 }
 
-SUPPORT_CASATUNES = (
-    MediaPlayerEntityFeature.BROWSE_MEDIA
-    | MediaPlayerEntityFeature.CLEAR_PLAYLIST
-    | MediaPlayerEntityFeature.GROUPING
-    | MediaPlayerEntityFeature.NEXT_TRACK
-    | MediaPlayerEntityFeature.PAUSE
-    | MediaPlayerEntityFeature.PLAY
-    | MediaPlayerEntityFeature.PLAY_MEDIA
-    | MediaPlayerEntityFeature.PREVIOUS_TRACK
-    | MediaPlayerEntityFeature.SEEK
-    | MediaPlayerEntityFeature.SELECT_SOURCE
-    | MediaPlayerEntityFeature.SHUFFLE_SET
-    | MediaPlayerEntityFeature.STOP
-    | MediaPlayerEntityFeature.TURN_OFF
-    | MediaPlayerEntityFeature.TURN_ON
-    | MediaPlayerEntityFeature.VOLUME_MUTE
-    | MediaPlayerEntityFeature.VOLUME_SET
-)
-
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the CasaTunes config entry."""
     coordinator: CasaTunesDataUpdateCoordinator = entry.runtime_data
     unique_id = coordinator.data.system.attributes["MACAddress"]
 
-    players = [
-        CasaTunesMediaPlayer(coordinator, zone, unique_id)
-        for zone in coordinator.data.zones
-    ]
-    async_add_entities(players)
+    known_zones = set()
+
+    @callback
+    def add_new_zones():
+        players = []
+        for zone in coordinator.data.zones:
+            if zone.ZoneID not in known_zones:
+                known_zones.add(zone.ZoneID)
+                players.append(CasaTunesMediaPlayer(coordinator, zone, unique_id))
+        if players:
+            async_add_entities(players)
+
+    add_new_zones()
+    entry.async_on_unload(coordinator.async_add_listener(add_new_zones))
 
 
 class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
@@ -241,7 +232,7 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
         self._attr_unique_id = f"{unique_id}_{zone.ZoneID}"
         self._attr_device_class = MediaPlayerDeviceClass.SPEAKER
         self._zone_id = zone.ZoneID
-        self._media_position_updated_at = None
+        self._attr_entity_registry_enabled_default = not zone.Hidden
 
     async def async_added_to_hass(self):
         """Entity added to hass."""
@@ -656,7 +647,11 @@ class CasaTunesMediaPlayer(CasaTunesDeviceEntity, MediaPlayerEntity):
     async def search(self, **service_data):
         """Search for media and play or queue the best match."""
         search_text = _build_search_text(service_data)
-        result = await self.coordinator.client.search_media(self.zone_id, search_text)
+        result = await self.coordinator.command(
+            "search_media", self.zone_id, search_text
+        )
+        if not isinstance(result, dict):
+            raise ServiceValidationError("Invalid CasaTunes search response")
         item = _best_search_item(result, service_data)
         if item is None:
             raise ServiceValidationError(f"No CasaTunes media found for {search_text}")

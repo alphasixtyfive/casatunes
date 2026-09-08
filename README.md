@@ -35,6 +35,66 @@ Your CasaTunes unit should be discovered automatically. If this doesn't happen, 
 - Work around CasaTunes REST API payload shape differences that can otherwise crash polling.
 - Improve media browsing, now-playing data, artwork proxying, grouping, search, TTS, and doorbell behavior.
 
+## Version 0.2.0
+
+Requires Home Assistant 2026.9 or newer. Existing zone unique IDs and the
+`casatunes.search`, `casatunes.tts`, and `casatunes.doorbell` actions are preserved.
+Restart Home Assistant after updating Python files.
+
+The integration uses local HTTP on port 8735. CasaTunes deliberately supports
+control through GET requests. All requests have a ten-second timeout, validate
+HTTP and application-level errors, and release their connections. No automatic
+retry is made for commands that might already have executed.
+
+Zone and playback data are polled every 15 seconds; system and source metadata
+are cached for five minutes. Failed polls do not publish partially updated data.
+Entities become unavailable when communication fails or a zone disappears.
+New zones are discovered during polling. Hidden zones are disabled by default
+when first created.
+
+Supported controls depend on the selected source and zone settings. Shuffle,
+repeat, buffering states, relative volume, enabled sources and group membership
+follow the server API. Groups must belong to the same CasaTunes server.
+Playback position timestamps represent received data, rather than property reads.
+
+Browse Media provides CasaTunes media IDs. Generic URLs, Home Assistant media
+source URLs and the standard URL announcement option are not supported.
+Queue options `add`, `play`, and `replace` are supported; `next` is rejected
+because the documented CasaTunes queue API has no equivalent. Native TTS and
+doorbell actions remain available.
+
+To change the server address, use **Settings → Devices & services → CasaTunes →
+Reconfigure**. The new address must identify the same server.
+To remove the integration, delete its entry in Devices & services; this does
+not alter CasaTunes server settings.
+
+## Troubleshooting and diagnostics
+
+Download diagnostics from the integration entry. They include power, sleep,
+source IDs and group status, but omit IP/MAC addresses, room names and media titles.
+Enable debug logging for `custom_components.casatunes` to record power-command
+intent. The integration does not implement a shutdown timer or a keep-on guard.
+A keep-on automation is a separate, user-controlled workaround, not a server fix.
+
+If a zone switches off, compare CasaTunes zone status with Home Assistant traces
+and command logs. A missing HA logbook context does not establish who sent a
+power-off request. Caller attribution may require server logs or network tracing.
+
+## Development
+
+Use Python 3.14 on Linux with Home Assistant 2026.9.1:
+
+```sh
+pip install -r requirements_test.txt
+ruff check custom_components tests
+pytest -q
+```
+
+The API contract tests also run without Home Assistant. CI additionally exercises
+real Home Assistant setup, unload, discovery, failures, entity state and services.
+See the server's `http://SERVER/casadev/` documentation and
+`http://SERVER:8735/api/v1/resources` for its installed API definitions.
+
 ## Known CasaTunes API issue
 
 Some CasaTunes servers can return duplicate rows for custom Internet Stations and Favorites from the CasaTunes API itself. This integration does not hide those duplicates with a Home Assistant-side filter, so the underlying CasaTunes data/cache issue remains visible and can be fixed at the source.
